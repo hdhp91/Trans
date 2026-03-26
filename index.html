@@ -1,0 +1,411 @@
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
+import PageCat from "@/components/PageCat";
+import PageDog from "@/components/PageDog";
+import DodgeGame from "@/components/DodgeGame";
+import PuzzleGame from "@/components/PuzzleGame";
+import ReactMarkdown from "react-markdown";
+import { parseTranslationBlocks } from "@/lib/translation-blocks";
+import {
+  Download,
+  FileText,
+  Languages,
+  LoaderCircle,
+  ScanText,
+  ShieldCheck,
+  Upload,
+} from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { useToast } from "@/components/ui/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { extractPagesForAi } from "@/lib/file-processing";
+
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
+const ALIGN_MAP: Record<string, "left" | "center" | "right"> = {
+  left: "left",
+  center: "center",
+  right: "right",
+};
+
+function TranslationRenderer({ markdown }: { markdown: string }) {
+  const blocks = parseTranslationBlocks(markdown);
+  return (
+    <>
+      {blocks.map((block, i) => {
+        if (block.type === "table") {
+          const isBorderless = block.borderless;
+          const borderClass = isBorderless ? "border-none" : "border border-border";
+          const cellBorderClass = isBorderless ? "border-none px-2 py-1" : "border border-border px-3 py-2";
+          return (
+            <table key={i} className={`my-4 w-full border-collapse text-sm table-fixed`}>
+              {block.headerRows.length > 0 && !isBorderless ? (
+                <thead>
+                  {block.headerRows.map((row, rowIndex) => (
+                    <tr key={`head-${rowIndex}`} className="bg-accent text-accent-foreground">
+                      {row.cells.map((cell, cellIndex) => (
+                        <th
+                          key={`head-${rowIndex}-${cellIndex}`}
+                          className={`${cellBorderClass} align-top whitespace-pre-line`}
+                          style={{ textAlign: ALIGN_MAP[cell.align] || "left" }}
+                          colSpan={cell.colSpan}
+                          rowSpan={cell.rowSpan}
+                        >
+                          {cell.markdown || "\u00A0"}
+                        </th>
+                      ))}
+                    </tr>
+                  ))}
+                </thead>
+              ) : null}
+              <tbody>
+                {block.bodyRows.map((row, rowIndex) => (
+                  <tr key={`body-${rowIndex}`}>
+                    {row.cells.map((cell, cellIndex) => (
+                      <td
+                        key={`body-${rowIndex}-${cellIndex}`}
+                        className={`${cellBorderClass} align-top whitespace-pre-line`}
+                        style={{ textAlign: ALIGN_MAP[cell.align] || "left" }}
+                        colSpan={cell.colSpan}
+                        rowSpan={cell.rowSpan}
+                      >
+                        {cell.markdown || "\u00A0"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+        }
+        return (
+          <div key={i} style={{ textAlign: ALIGN_MAP[block.align] || "left" }} className="mb-3">
+            <ReactMarkdown>{block.markdown}</ReactMarkdown>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function GamePanel() {
+  const [activeGame, setActiveGame] = useState<"dodge" | "puzzle">("dodge");
+  return (
+    <div className="min-h-[420px] flex flex-col">
+      <div className="flex items-center gap-1 mb-2 px-1">
+        <button
+          onClick={() => setActiveGame("dodge")}
+          className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+            activeGame === "dodge"
+              ? "bg-primary text-primary-foreground"
+              : "bg-secondary text-secondary-foreground hover:bg-accent"
+          }`}
+        >
+          🎮 Dodge Game
+        </button>
+        <button
+          onClick={() => setActiveGame("puzzle")}
+          className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+            activeGame === "puzzle"
+              ? "bg-primary text-primary-foreground"
+              : "bg-secondary text-secondary-foreground hover:bg-accent"
+          }`}
+        >
+          🧩 Giấc Mơ Phòng Kín
+        </button>
+      </div>
+      <div className="flex-1 flex items-center justify-center">
+        {activeGame === "dodge" ? <DodgeGame /> : <PuzzleGame />}
+      </div>
+    </div>
+  );
+}
+
+const Index = () => {
+  const { toast } = useToast();
+
+  const [file, setFile] = useState<File | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<string>("");
+  const [translation, setTranslation] = useState<string>("");
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [isExportingDocx, setIsExportingDocx] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (sourcePreview) {
+        URL.revokeObjectURL(sourcePreview);
+      }
+    };
+  }, [sourcePreview]);
+
+  const fileName = useMemo(() => {
+    if (!file) return "hai-phuong-translation";
+    return file.name.replace(/\.[^.]+$/, "") || "hai-phuong-translation";
+  }, [file]);
+
+  const onSelectFile = (selected: File | null) => {
+    if (!selected) return;
+
+    if (selected.size > MAX_FILE_SIZE) {
+      toast({
+        variant: "destructive",
+        title: "File quá lớn",
+        description: "Giới hạn hiện tại là 20MB mỗi tài liệu.",
+      });
+      return;
+    }
+
+    const supported = selected.type.startsWith("image/") || selected.type === "application/pdf";
+    if (!supported) {
+      toast({
+        variant: "destructive",
+        title: "Định dạng chưa hỗ trợ",
+        description: "Vui lòng tải lên ảnh (JPG/PNG/WebP) hoặc PDF.",
+      });
+      return;
+    }
+
+    setFile(selected);
+    setTranslation("");
+
+    const objectUrl = URL.createObjectURL(selected);
+    setSourcePreview(objectUrl);
+  };
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0] ?? null;
+    onSelectFile(selected);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const selected = event.dataTransfer.files?.[0] ?? null;
+    onSelectFile(selected);
+  };
+
+  const handleTranslate = async () => {
+    if (!file) {
+      toast({
+        variant: "destructive",
+        title: "Chưa có tài liệu",
+        description: "Hãy tải lên ảnh hoặc PDF trước khi dịch.",
+      });
+      return;
+    }
+
+    setIsTranslating(true);
+
+    try {
+      const pages = await extractPagesForAi(file);
+      const { data, error } = await supabase.functions.invoke("translate-document", {
+        body: {
+          fileName: file.name,
+          mimeType: file.type,
+          pages,
+        },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Dịch thất bại");
+      }
+
+      if (!data?.translation) {
+        throw new Error("Không nhận được kết quả dịch.");
+      }
+
+      setTranslation(data.translation);
+      toast({
+        title: "Dịch thành công",
+        description: "Kết quả đã được render ở cột bên phải.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Đã có lỗi xảy ra.";
+      toast({
+        variant: "destructive",
+        title: "Không thể dịch tài liệu",
+        description: message,
+      });
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  const handleDownloadDocx = async () => {
+    if (!translation) return;
+
+    setIsExportingDocx(true);
+    try {
+      const { downloadDocx } = await import("@/lib/exporters");
+      await downloadDocx(translation, `${fileName}-translated`);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Xuất Word thất bại",
+        description: error instanceof Error ? error.message : "Không thể xuất DOCX.",
+      });
+    } finally {
+      setIsExportingDocx(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!translation) return;
+
+    setIsExportingPdf(true);
+    try {
+      const { downloadPdf } = await import("@/lib/exporters");
+      downloadPdf(translation, `${fileName}-translated`);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Xuất PDF thất bại",
+        description: error instanceof Error ? error.message : "Không thể mở cửa sổ in PDF.",
+      });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen p-4 md:p-6 lg:p-8">
+      <section className="mx-auto flex w-full max-w-[1440px] flex-col gap-4">
+        <Card className="doc-shell flex flex-col gap-4 rounded-md border border-border bg-panel p-4 text-panel-foreground">
+          <div className="flex flex-col gap-3 border-b border-border pb-4 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <ScanText className="h-5 w-5 text-primary" />
+                <p className="text-lg font-semibold">Hai Phuong With Love!!!</p>
+              </div>
+              <p className="text-sm text-muted-foreground whitespace-pre-line">
+                {"Chị em có hồ sơ gì thì quăng vào đây, đúng sai không quan trọng, quan trọng là mình có nhau!\n---\nPhù vân quá nhãn vô tâm lự,\nBán nhật nhàn miên bán nhật thi.\nThử thân nguyện hóa xuân phong khứ,\nNhất độ hoa khai nhất độ lai."}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary" className="rounded-md border border-border bg-secondary px-3 py-1 text-xs">
+                Gemini 3 Flash
+              </Badge>
+              <Badge className="rounded-md border border-success/30 bg-success/10 px-3 py-1 text-xs text-success">
+                <ShieldCheck className="mr-1 h-3.5 w-3.5" /> AI Processed
+              </Badge>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="rounded-md border border-border bg-panel-muted p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-semibold">Nguồn hồ sơ</p>
+                <Badge variant="outline" className="rounded-md border-border text-xs">
+                  Upload ảnh/PDF
+                </Badge>
+              </div>
+
+              <div
+                onDrop={handleDrop}
+                onDragOver={(event) => event.preventDefault()}
+                className="flex min-h-36 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-background p-4 text-center"
+              >
+                <Upload className="h-5 w-5 text-primary" />
+                <p className="text-sm font-medium">Kéo thả file vào đây hoặc chọn file</p>
+                <p className="text-xs text-muted-foreground">JPG, PNG, WebP, PDF · tối đa 20MB</p>
+                <label className="mt-1 cursor-pointer rounded-md border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-accent">
+                  Chọn tài liệu
+                  <input type="file" className="hidden" accept="image/*,application/pdf" onChange={handleFileInput} />
+                </label>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
+                  <p className="font-semibold text-foreground whitespace-pre-line">{"Đợi khi nào ta có thời gian nhàn hạ\nVề quê trồng hai mẩu ruộng.\nSáng sớm ngắm bình mình, chiều tà xem mây\nTrà trong, rượu nồng, trải qua năm tháng còn lại,...\nThế giới này  chỉ thiếu lòng tin và niềm yêu thương giữa con người với con người! Bạn tin Hải Phương không? Nếu tin thì xuống tay đi..."}</p>
+                </div>
+
+                <Button onClick={handleTranslate} disabled={!file || isTranslating} className="w-full rounded-md">
+                  {isTranslating ? (
+                    <>
+                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Đang xử lý dịch...
+                    </>
+                  ) : (
+                    <>
+                      <Languages className="mr-2 h-4 w-4" /> Process Translation
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              <div className="mt-4 rounded-md border border-border bg-background p-2">
+                {file ? (
+                  file.type === "application/pdf" ? (
+                    <iframe
+                      title="Source PDF preview"
+                      src={sourcePreview}
+                      className="h-[420px] w-full rounded-sm border border-border"
+                    />
+                  ) : (
+                    <img
+                      src={sourcePreview}
+                      alt="Bản gốc tải lên"
+                      loading="lazy"
+                      className="h-[420px] w-full rounded-sm border border-border object-contain"
+                    />
+                  )
+                ) : (
+                  <GamePanel />
+                )}
+              </div>
+            </Card>
+
+            <Card className="rounded-md border border-border bg-panel-muted p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">Bản dịch đã render</p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="rounded-md"
+                    onClick={handleDownloadDocx}
+                    disabled={!translation || isExportingDocx}
+                  >
+                    {isExportingDocx ? (
+                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="mr-2 h-4 w-4" />
+                    )}
+                    Download Word (.docx)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="rounded-md"
+                    onClick={handleDownloadPdf}
+                    disabled={!translation || isExportingPdf}
+                  >
+                    {isExportingPdf ? (
+                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileText className="mr-2 h-4 w-4" />
+                    )}
+                    Download PDF
+                  </Button>
+                </div>
+              </div>
+
+              <div className="doc-preview h-[700px] overflow-auto rounded-md border border-border bg-background p-4">
+                {translation ? (
+                  <TranslationRenderer markdown={translation} />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                    Kết quả dịch sẽ hiển thị tại đây sau khi AI xử lý.
+                  </div>
+                )}
+              </div>
+            </Card>
+          </div>
+        </Card>
+      </section>
+      <PageCat />
+      <PageDog />
+    </main>
+  );
+};
+
+export default Index;
