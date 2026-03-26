@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hai Phuong Translation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 p-4 md:p-8">
+  <div class="max-w-6xl mx-auto">
+    <h1 class="text-3xl font-bold text-center mb-2">Hai Phuong With Love!!!</h1>
+    <p class="text-center text-gray-600 mb-8">Dịch tài liệu bằng AI</p>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Cột trái: Upload -->
+      <div class="bg-white p-6 rounded-xl border shadow-sm">
+        <h2 class="font-semibold mb-4">Nguồn hồ sơ</h2>
+        <div class="border-2 border-dashed border-gray-300 rounded-xl h-80 flex flex-col items-center justify-center text-center">
+          <p class="text-gray-500">Kéo thả ảnh hoặc PDF vào đây</p>
+          <button class="mt-4 px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm">Chọn file</button>
+          <p class="text-xs text-gray-400 mt-3">JPG, PNG, PDF • tối đa 20MB</p>
+        </div>
+        <button class="w-full mt-6 py-3 bg-blue-600 text-white rounded-lg font-medium">Process Translation</button>
+      </div>
+
+      <!-- Cột phải: Kết quả -->
+      <div class="bg-white p-6 rounded-xl border shadow-sm">
+        <h2 class="font-semibold mb-4">Bản dịch</h2>
+        <div class="h-96 border rounded-xl p-6 bg-gray-50 text-gray-600 overflow-auto">
+          Kết quả dịch sẽ hiển thị tại đây sau khi xử lý...
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button class="flex-1 py-3 border rounded-lg text-sm">Download Word (.docx)</button>
+          <button class="flex-1 py-3 border rounded-lg text-sm">Download PDF</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
